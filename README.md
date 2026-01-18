@@ -9,9 +9,9 @@
 <hr>
 <h3 align="center">Standalone apps</h3>
 <p align="center">
-  <a href="https://maksimkorzh.github.io/wukong-xiangqi/src/gui/xiangqi.html">Play online</a> |
-  <a href="https://maksimkorzh.github.io/wukong-xiangqi/apps/game_viewer/gui/game_viewer.html">View games</a> |
-  <a href="https://maksimkorzh.github.io/wukong-xiangqi/apps/puzzle_solver/gui/puzzle_solver.html">Solve puzzles</a>
+  <a href="https://itstarsec.github.io/Coach-Xiangqi/src/gui/xiangqi.html">Play online</a> |
+  <a href="https://itstarsec.pythonanywhere.com/analytics/api/stats">Stats Count Access</a> |
+  <a href="https://itstarsec.github.io/Coach-Xiangqi/apps/puzzle_solver/gui/puzzle_solver.html">Solve puzzles</a>
 </p>
 <hr>
 <h3 align="center">Wukong in 3rd party websites</h3>
