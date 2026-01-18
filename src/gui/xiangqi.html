@@ -1,21 +1,24 @@
 <!DOCTYPE HTML>
-<html>
+<html lang="en">
   <head>
     <title>Xiangqi - play vs computer</title>
-    
+
     <!-- Encoding -->
     <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
     <meta content="utf-8" http-equiv="encoding">
-    
+
+    <!-- Responsive -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
     <!-- SEO -->
     <meta name="description" content="Didactic Chinese chess Xiangqi engine by Code Monkey King">
     <meta name="keywords" content="play xiangqi online chinese chess engine javascript">
-    
+
     <!-- Bootstrap -->
     <link rel="stylesheet" href="libs/css/bootstrap.min.css">
     <script src="libs/js/jquery.min.js"></script>
     <script src="libs/js/bootstrap.bundle.min.js"></script>
-    
+
     <!-- Analytics -->
     <script type="text/javascript">
       if (window.location.href.includes('github')) {
@@ -25,31 +28,54 @@
         });
       }
     </script>
-    
-  </head>
-  <body style="font-family:
-               monospace; font-size: 16px;
-               background: url(game/images/misc/wallpaper.jpg);
-               background-repeat: no-repeat;
-               /* fixed backgrounds can cause repaints/jank on some GPUs */
-               background-attachment: scroll;
-               background-position: center;
-               background-size: cover;
-               display: flex;
-               justify-content: center;
-               align-items: center;
-               height: 100vh;
-               "
-        
-        class="img-fluid bg-cover text-center">
 
     <style>
-      /* --- Coach panel (mini-map style) --- */
+      /* =========================
+         Page background / layout
+         ========================= */
+      body {
+        font-family: monospace;
+        font-size: 16px;
+
+        background: url(game/images/misc/wallpaper.jpg);
+        background-repeat: no-repeat;
+        /* fixed backgrounds can cause repaints/jank on some GPUs */
+        background-attachment: scroll;
+        background-position: center;
+        background-size: cover;
+
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+
+        margin: 0;
+      }
+
+      /* --- Coach panel + board layout --- */
       #layout {
         display: flex;
         gap: 14px;
         align-items: flex-start;
       }
+
+      /* Main column (board + controls) */
+      #main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      /* Chess board view */
+      #xiangqiboard {
+        border: 1px solid black;
+        background: url(game/images/boards/board-ccbridge.png);
+        background-size: contain;
+      }
+
+      /* =========================
+         Coach panel (mini-map only)
+         ========================= */
       #coach-panel {
         width: 380px;
         color: #d7e0ea;
@@ -58,13 +84,12 @@
         border-radius: 14px;
         padding: 12px;
         text-align: left;
-        /* keep it light for smoother rendering */
         box-shadow: 0 6px 18px rgba(0,0,0,0.25);
         backdrop-filter: none;
         position: sticky;
         top: 10px;
       }
-      .coach-legend { color: #90a4b8; font-size: 12px; margin-top: 10px; }
+
       #coach-minimap {
         width: 356px;
         height: 420px;
@@ -81,6 +106,7 @@
         height: 100%;
         display: block;
       }
+
       #coach-move-label {
         position: absolute;
         left: 10px;
@@ -96,163 +122,177 @@
         text-align: center;
         user-select: none;
       }
-      .coach-gridline { position:absolute; background: rgba(255,255,255,0.05); }
-      .coach-dot {
-        width: 10px; height: 10px; border-radius: 50%;
-        position: absolute; transform: translate(-50%, -50%);
-        box-shadow: 0 0 10px rgba(255,255,255,0.12);
+
+      /* Replaces old: "Cyan = ô đi | Yellow = ô đến"
+         Now will be set by coach.js to:
+         Trạng thái: KHAI CUỘC / TRUNG CUỘC / TÀN CUỘC (with different colors)
+      */
+      #coach-legend {
+        margin-top: 10px;
+        font-size: 13px;
+        line-height: 1.2;
+        user-select: none;
+        /* color set dynamically in coach.js */
       }
-      .coach-dot.red { background: #ff4d4d; }
-      .coach-dot.black { background: #e6eef7; opacity: 0.85; }
-      .coach-hint-from, .coach-hint-to {
-        width: 18px; height: 18px; border-radius: 50%;
-        position: absolute; transform: translate(-50%, -50%);
-        border: 2px solid #00d4ff;
-        box-shadow: 0 0 18px rgba(0, 212, 255, 0.35);
-      }
-      .coach-hint-to {
-        border-color: #ffd000;
-        box-shadow: 0 0 18px rgba(255, 208, 0, 0.35);
-      }
-      #coach-arrow {
-        position: absolute; left: 0; top: 0; width: 100%; height: 100%;
-        pointer-events: none;
-      }
+
       @media (max-width: 900px) {
-        #layout { flex-direction: column; align-items: center; }
-        #coach-panel { width: 94vw; max-width: 520px; }
-        #coach-minimap { width: calc(94vw - 24px); max-width: 496px; height: 58vh; min-height: 360px; }
+        #layout {
+          flex-direction: column;
+          align-items: center;
+        }
+        #coach-panel {
+          width: 94vw;
+          max-width: 520px;
+        }
+        #coach-minimap {
+          width: calc(94vw - 24px);
+          max-width: 496px;
+          height: 58vh;
+          min-height: 360px;
+        }
       }
     </style>
+  </head>
+
+  <body class="img-fluid bg-cover text-center">
 
     <div id="layout">
       <div id="main">
-      <!-- Chess board view -->
-      <div id="xiangqiboard" 
-           style="border: 1px solid black;
-                  background: url(game/images/boards/board-ccbridge.png);
-                  background-size: contain;"
-      ></div>
-      
-      <div class="btn-group mt-1 mb-1" style="width: 420px;">
-        <!-- Bots -->
-        <div class="dropdown mr-1">
-          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <image id="current-bot-image" src="game/images/bots/wukong.png" style="width: 25px;"></img>
-          </button>
-          <div class="dropdown-menu" aria-labelledby="dropdownMenuButton" style="width: 420px;">
-            <li class="list-group-item-action mb-1">
-              <button class="btn col-9 text-left" onclick="setBot('Baihua');">
-                <img src="game/images/bots/baihua.jpg" style="width: 40px; border: 1px solid #777;"></img>
-                Bai Hua (level 1)
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1">
-              <button class="btn col-9 text-left" onclick="setBot('CMK');">
-                <img src="game/images/bots/cmk.png" style="width: 40px; border: 1px solid #777;"></img>
-                Maksim Korzh (level 2)
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1">
-              <button class="btn col-9 text-left" onclick="setBot('HGM');">
-                <img src="game/images/bots/hgm.jpg" style="width: 40px; border: 1px solid #777;"></img>
-                H.G. Muller (level 3)
-              </button>
-            </li>
-            
-            <li class="list-group-item-action mb-1">
-              <button class="btn col-9 text-left" onclick="setBot('Haucheng');">
-                <img src="game/images/bots/Haucheng.jpg" style="width: 40px; border: 1px solid #777;"></img>
-                Fang Hao Jian (level 4)
-              </button>
-            </li>
-            <li class="list-group-item-action">
-              <button class="btn text-left" onclick="setBot('Wukong');">
-                <img src="game/images/bots/wukong.png" style="width: 40px; border: 1px solid #777;"></img>
-                Song Wukong (level 5)
-              </button>
-            </li>
-            <li class="list-group-item-action">
-              <button class="btn text-left" onclick="setBot('Huronghua');">
-                <img src="game/images/bots/Huronghua.jpg" style="width: 40px; border: 1px solid #777;"></img>
-                Hu Rong Hua (level 6)
-              </button>
-            </li>
-            <li class="list-group-item-action">
-              <button class="btn text-left" onclick="setBot('Liudahua');">
-                <img src="game/images/bots/Liudahua.jpg" style="width: 40px; border: 1px solid #777;"></img>
-                Liu Da Hua (level 7)
-              </button>
-            </li>
-          </div>
-          
-        </div>
-                
-        <!-- Game controls -->
-        <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="newGame();">New</button>
-        <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="userTime = 0; think();">Move</button>
-        <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="undo();">Undo</button>
-        <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold" onclick="flipBoard()">Flip</button>
-        
-        <!-- Change pieces bitmaps -->
-        <div class="dropdown ml-1">
-          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            <image id="current-promoted-image" src="game/images/romanized_pieces/14.svg" style="width: 25px;"></img>
-          </button>
-          <div class="dropdown-menu dropdown-menu-right text-right" aria-labelledby="dropdownMenuButton" style="width: 202px;">
-            <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board-ccbridge.png');">
-              <button class="btn">CCBridge
-              <img src="game/images/boards/board-ccbridge.png" class="mr-2" style="width: 40px;"></img>
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board_light.svg');">
-              <button class="btn">Light theme
-                <img src="game/images/boards/board_light.svg" class="mr-2" style="width: 40px;"></img>
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board_dark.svg');">
-              <button class="btn">Dark theme
-              <img src="game/images/boards/board_dark.svg" class="mr-2" style="width: 40px;"></img>
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1" onclick="setPieceTheme('romanized_pieces');">
-              <button class="btn">Romanized
-                <img src="game/images/romanized_pieces/14.svg" class="mr-2" style="width: 40px;"></img>
-              </button>
-            </li>
-            <li class="list-group-item-action mb-1" onclick="setPieceTheme('traditional_pieces');">
-              <button class="btn">Traditional
-                <img src="game/images/traditional_pieces/7.svg" class="mr-2" style="width: 40px;"></img>
-              </button>
-            </li>
-            
-            <div class="dropdown-divider"></div>
-            
-            <!-- Show legal moves -->
-            <div class="col text-left">
-              <input type="checkbox" id="showMoves" class="mr-2" checked="true"/>Show moves
-            </div>
-            
-            <div class="dropdown-divider"></div>
-            
-            <!-- Edit mode -->
-            <div class="col text-left">
-              <input type="checkbox" id="editMode" class="mr-2"/>Edit mode
-            </div>
-            
-            <div class="dropdown-divider"></div>
-            
-            <!-- Download PGN -->
-            <div class="text-center">
-              <button class="btn btn-sm btn-outline-success" onclick="downloadPgn();">Download PGN</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <!-- PGN -->
-      <textarea id="pgn" rows="3" name="text" class="form-control" style="width: 420px;" spellcheck="false"></textarea>
+        <!-- Chess board view -->
+        <div id="xiangqiboard"></div>
 
+        <div class="btn-group mt-1 mb-1" style="width: 420px;">
+          <!-- Bots -->
+          <div class="dropdown mr-1">
+            <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold dropdown-toggle"
+                    type="button" id="dropdownMenuButton"
+                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+              <img id="current-bot-image" src="game/images/bots/wukong.png" style="width: 25px;" alt="current bot" />
+            </button>
+
+            <div class="dropdown-menu" aria-labelledby="dropdownMenuButton" style="width: 420px;">
+              <li class="list-group-item-action mb-1">
+                <button class="btn col-9 text-left" onclick="setBot('Baihua');">
+                  <img src="game/images/bots/baihua.jpg" style="width: 40px; border: 1px solid #777;" alt="Baihua" />
+                  Bai Hua (level 1)
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1">
+                <button class="btn col-9 text-left" onclick="setBot('CMK');">
+                  <img src="game/images/bots/cmk.png" style="width: 40px; border: 1px solid #777;" alt="CMK" />
+                  Maksim Korzh (level 2)
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1">
+                <button class="btn col-9 text-left" onclick="setBot('HGM');">
+                  <img src="game/images/bots/hgm.jpg" style="width: 40px; border: 1px solid #777;" alt="HGM" />
+                  H.G. Muller (level 3)
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1">
+                <button class="btn col-9 text-left" onclick="setBot('Haucheng');">
+                  <img src="game/images/bots/Haucheng.jpg" style="width: 40px; border: 1px solid #777;" alt="Haucheng" />
+                  Fang Hao Jian (level 4)
+                </button>
+              </li>
+
+              <li class="list-group-item-action">
+                <button class="btn text-left" onclick="setBot('Wukong');">
+                  <img src="game/images/bots/wukong.png" style="width: 40px; border: 1px solid #777;" alt="Wukong" />
+                  Song Wukong (level 5)
+                </button>
+              </li>
+
+              <li class="list-group-item-action">
+                <button class="btn text-left" onclick="setBot('Huronghua');">
+                  <img src="game/images/bots/Huronghua.jpg" style="width: 40px; border: 1px solid #777;" alt="Huronghua" />
+                  Hu Rong Hua (level 6)
+                </button>
+              </li>
+
+              <li class="list-group-item-action">
+                <button class="btn text-left" onclick="setBot('Liudahua');">
+                  <img src="game/images/bots/Liudahua.jpg" style="width: 40px; border: 1px solid #777;" alt="Liudahua" />
+                  Liu Da Hua (level 7)
+                </button>
+              </li>
+            </div>
+          </div>
+
+          <!-- Game controls -->
+          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="newGame();">New</button>
+          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="userTime = 0; think();">Move</button>
+          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold mr-1" onclick="undo();">Undo</button>
+          <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold" onclick="flipBoard()">Flip</button>
+
+          <!-- Change pieces bitmaps -->
+          <div class="dropdown ml-1">
+            <button class="btn btn-outline-secondary text-dark bg-light font-weight-bold dropdown-toggle"
+                    type="button" id="dropdownMenuButton2"
+                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+              <img id="current-promoted-image" src="game/images/romanized_pieces/14.svg" style="width: 25px;" alt="pieces" />
+            </button>
+
+            <div class="dropdown-menu dropdown-menu-right text-right" aria-labelledby="dropdownMenuButton2" style="width: 202px;">
+              <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board-ccbridge.png');">
+                <button class="btn">CCBridge
+                  <img src="game/images/boards/board-ccbridge.png" class="mr-2" style="width: 40px;" alt="CCBridge" />
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board_light.svg');">
+                <button class="btn">Light theme
+                  <img src="game/images/boards/board_light.svg" class="mr-2" style="width: 40px;" alt="Light" />
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1" onclick="setBoardTheme('game/images/boards/board_dark.svg');">
+                <button class="btn">Dark theme
+                  <img src="game/images/boards/board_dark.svg" class="mr-2" style="width: 40px;" alt="Dark" />
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1" onclick="setPieceTheme('romanized_pieces');">
+                <button class="btn">Romanized
+                  <img src="game/images/romanized_pieces/14.svg" class="mr-2" style="width: 40px;" alt="Romanized" />
+                </button>
+              </li>
+
+              <li class="list-group-item-action mb-1" onclick="setPieceTheme('traditional_pieces');">
+                <button class="btn">Traditional
+                  <img src="game/images/traditional_pieces/7.svg" class="mr-2" style="width: 40px;" alt="Traditional" />
+                </button>
+              </li>
+
+              <div class="dropdown-divider"></div>
+
+              <!-- Show legal moves -->
+              <div class="col text-left">
+                <input type="checkbox" id="showMoves" class="mr-2" checked />Show moves
+              </div>
+
+              <div class="dropdown-divider"></div>
+
+              <!-- Edit mode -->
+              <div class="col text-left">
+                <input type="checkbox" id="editMode" class="mr-2" />Edit mode
+              </div>
+
+              <div class="dropdown-divider"></div>
+
+              <!-- Download PGN -->
+              <div class="text-center">
+                <button class="btn btn-sm btn-outline-success" onclick="downloadPgn();">Download PGN</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PGN -->
+        <textarea id="pgn" rows="3" name="text" class="form-control" style="width: 420px;" spellcheck="false"></textarea>
       </div>
 
       <!-- Realtime Coach Panel (mini-map only) -->
@@ -261,42 +301,41 @@
           <canvas id="coach-canvas"></canvas>
           <div id="coach-move-label">…</div>
         </div>
-        <div id="coach-legend"></div>
+
+        <!-- This text is controlled by coach.js now -->
+        <div id="coach-legend">Trạng thái: …</div>
       </div>
     </div>
-    
+
     <!-- Xiangqi engine -->
     <script src="../engine/wukong.js"></script>
-    
+
     <!-- Bots -->
     <script src="game/bots.js"></script>
 
     <!-- User input handling -->
     <script src="game/xiangqi.js"></script>
 
-    <!-- Realtime coaching overlay (browser-only, no npm / no node) -->
+    <!-- Realtime coaching overlay -->
     <script src="game/coach.js"></script>
-    
+
     <!-- DevTools detection -->
-    <script src="libs/js/isdevtoolopen.js"> </script>
-    
+    <script src="libs/js/isdevtoolopen.js"></script>
+
     <!-- Remove background image when DevTools are open -->
     <script type="module">
-      // on update page when devtools are opened
-	  if (window.devtools.isOpen == 1) {
+      if (window.devtools && window.devtools.isOpen == 1) {
         document.body.style.backgroundImage = '';
       }
-      
-      // on devtools open/close
-	    window.addEventListener('devtoolschange', event => {
-	      if (window.devtools.isOpen == 0) {
+
+      window.addEventListener('devtoolschange', event => {
+        if (!window.devtools) return;
+        if (window.devtools.isOpen == 0) {
           document.body.style.backgroundImage = '';
         } else if (window.devtools.isOpen == 1) {
           document.body.style.backgroundImage = 'url(game/images/misc/wallpaper.jpg)';
         }
-      });	    
+      });
     </script>
   </body>
-<html>
-
-
+</html>
