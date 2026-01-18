@@ -1,51 +1,53 @@
 /*
-  Realtime Coach (Browser-only) - MAX STRENGTH EDITION
+  Realtime Coach (Browser-only) - ULTRA STRENGTH (Main thread)
   - No npm, no node.
   - Uses the same in-page Wukong engine instance already created in xiangqi.js.
   - Watches moves via updatePgn()/drawBoard() hook and suggests the best move for the side to move.
-  - Renders a "mini-map" panel (LoL-ish) with from/to highlights and an arrow.
+  - Renders a "mini-map" panel with from/to highlights and an arrow.
 
-  MAX strength changes:
-  - Coach analyzes for BOTH sides (RED/BLACK) based on side-to-move.
-  - Uses time-control search with depth=64 and a larger time budget (default 5.0s).
-  - Book move still supported if available (Liudahua).
+  ULTRA strength changes:
+  - Analyze for BOTH sides depending on side-to-move.
+  - Time-control search with large time budget (default 10s).
+  - High max depth to allow deeper iterative deepening.
+  - Strong anti-jank: analyzes only when position changed, cooldown, debounce, idle callback.
 */
 
 (function () {
   'use strict';
 
   // =========================
-  // MAX STRENGTH CONFIG
+  // ULTRA STRENGTH CONFIG
   // =========================
 
-  // Analyze for BOTH sides (important for puzzles and for not losing to strong bot).
+  // Analyze for BOTH sides (Puzzle / real play)
   const COACH_ONLY_WHEN_RED_TO_MOVE = false;
 
-  // Bot profile for opening book (optional). Book helps avoid silly early mistakes.
+  // Optional opening book profile (if present). Helps avoid early blunders.
   const COACH_BOT_NAME = 'Liudahua';
 
-  // Time budget per suggestion (seconds).
-  // - Recommended for "level ~7": 3.0s to 5.0s depending on CPU.
-  // - If your UI still smooth, you can push 8.0s or 10.0s for even stronger.
-  const COACH_TIME_SECONDS = 5.0;
+  // Stronger-than-level-7: 8–12 seconds typically beats “level 7” style in many UIs.
+  // Increase to 12–15 if your CPU is strong and you can tolerate longer freezes.
+  const COACH_TIME_SECONDS = 10.0;
 
-  // Always use depth 64 for timed search (iterative deepening will stop by time).
-  const COACH_DEPTH_FALLBACK = 64;
+  // Give engine room to iterate deep while still stopping by time-control.
+  // 64 is common; 96/128 can be stronger if engine respects time-stop well.
+  const COACH_DEPTH_TIMED = 128;
 
-  // UI fallback depth (only used if time-control APIs are missing)
-  const COACH_DEPTH_UI = 16;
+  // Fallback if TC APIs are missing
+  const COACH_DEPTH_UI = 22;
 
-  // Rate-limit analysis (ms). Larger -> fewer stutters; smaller -> more responsive.
-  // With 5s search, DO NOT run too frequently.
-  const MIN_INTERVAL_MS = 900;
+  // With 10s searches, do NOT analyze too frequently.
+  // Cooldown prevents repeated long freezes caused by multiple UI triggers.
+  const MIN_INTERVAL_MS = 1800;  // minimum time between analyses
+  const DEBOUNCE_MS = 250;       // merge rapid triggers
 
-  // If user is dragging pieces / UI noisy, we prefer idle callback to reduce perceived lag.
+  // Prefer idle callback to reduce perceived lag while dragging
   const USE_IDLE_CALLBACK = true;
+  const IDLE_TIMEOUT_MS = 700;
 
   // =========================
   // Required globals
   // =========================
-
   if (typeof window.engine === 'undefined') {
     console.warn('[Coach] engine not found. coach disabled.');
     return;
@@ -61,7 +63,7 @@
     return;
   }
 
-  // Single canvas render (much smoother than creating/removing many DOM nodes)
+  // Canvas (single render surface)
   const ctx = elCanvas.getContext('2d', { alpha: true, desynchronized: true });
   let dpr = Math.max(1, window.devicePixelRatio || 1);
 
@@ -77,10 +79,6 @@
 
   // ---- helpers ----
   const PIECE_TO_CHAR = ['.', 'P', 'A', 'B', 'N', 'C', 'R', 'K', 'p', 'a', 'b', 'n', 'c', 'r', 'k'];
-  const PIECE_NAME_VI = {
-    P: 'Tốt', A: 'Sĩ', B: 'Tượng', N: 'Mã', C: 'Pháo', R: 'Xe', K: 'Tướng',
-    p: 'Tốt', a: 'Sĩ', b: 'Tượng', n: 'Mã', c: 'Pháo', r: 'Xe', k: 'Tướng'
-  };
 
   function ucciFromMove(move) {
     const s = window.engine.squareToString(window.engine.getSourceSquare(move));
@@ -93,8 +91,8 @@
   }
 
   function ucciToFenRow(ucci) {
-    // UCCI ranks: 0 (Red side bottom) .. 9 (Black side top)
-    // FEN rows:   0 (top) .. 9 (bottom)
+    // UCCI ranks: 0 (Red bottom) .. 9 (Black top)
+    // Canvas rows: 0 top .. 9 bottom
     const fromFile = fileToIndex(ucci[0]);
     const fromRank = Number(ucci[1]);
     const toFile = fileToIndex(ucci[2]);
@@ -107,7 +105,7 @@
     };
   }
 
-  // Build coordinate->square map once (engine uses 11x14 mailbox internally)
+  // Build coordinate->square map once (engine uses 11x14 mailbox)
   const coordToSquare = (function buildMap() {
     const map = Object.create(null);
     for (let sq = 0; sq < 11 * 14; sq++) {
@@ -124,12 +122,26 @@
     return PIECE_TO_CHAR[piece] || '.';
   }
 
-  function getPieceCharAtSquare(square) {
-    const piece = window.engine.getPiece(square);
-    return PIECE_TO_CHAR[piece] || '.';
+  // Position fingerprint to prevent redundant heavy search
+  function getPositionKey() {
+    // Best effort: use fen() if exists, else use move stack as a weaker proxy.
+    try {
+      if (typeof window.engine.fen === 'function') return window.engine.fen();
+    } catch (_) {}
+
+    try {
+      if (typeof window.engine.getFen === 'function') return window.engine.getFen();
+    } catch (_) {}
+
+    try {
+      // moveStack tends to change per position
+      return 'ms:' + window.engine.moveStack().length + ':' + (window.engine.getSide ? window.engine.getSide() : '?');
+    } catch (_) {}
+
+    return String(Date.now());
   }
 
-  // ---- book + time control (same style as GUI bots) ----
+  // ---- book + time control ----
   function getCoachBookLines() {
     try {
       if (window.bots && window.bots[COACH_BOT_NAME] && Array.isArray(window.bots[COACH_BOT_NAME].book)) {
@@ -140,7 +152,7 @@
   }
 
   function getCoachBookMove() {
-    // Deterministic: pick first matching line to reduce randomness/blunders
+    // Deterministic first matching line
     const bookLines = getCoachBookLines();
     if (!bookLines.length) return 0;
 
@@ -187,25 +199,25 @@
   }
 
   function timedSearch(depth, seconds) {
-    // Force TC then search with depth=64 (iterative deepening, stops by time)
+    // Force time-control then search; engine should stop on stopTime
     setTimeControl(seconds);
     return window.engine.search(depth);
   }
 
-  function pickBestMoveStrong() {
-    // 1) opening book (Liudahua) if available
+  function pickBestMoveUltra() {
+    // 1) Opening book (if any)
     let m = getCoachBookMove();
     if (m && m !== 0) return m;
 
-    // 2) time-based search (strongest)
-    m = timedSearch(COACH_DEPTH_FALLBACK, COACH_TIME_SECONDS);
+    // 2) Strong timed search
+    m = timedSearch(COACH_DEPTH_TIMED, COACH_TIME_SECONDS);
     if (m && m !== 0) return m;
 
-    // 3) fallback: depth from UI (if TC not available)
+    // 3) Fallback deep-ish fixed depth
     m = window.engine.search(COACH_DEPTH_UI);
     if (m && m !== 0) return m;
 
-    // 4) last resort: first legal move
+    // 4) Last resort
     const moves = window.engine.generateLegalMoves();
     return (moves && moves.length) ? moves[0].move : 0;
   }
@@ -258,10 +270,12 @@
 
   function drawHintCanvas(ucci, W, H) {
     if (!ucci || ucci.length < 4) return;
+
     const c = ucciToFenRow(ucci);
     const a = cellToXY(c.fromFile, c.fromRow, W, H);
     const b = cellToXY(c.toFile, c.toRow, W, H);
 
+    // Arrow
     ctx.save();
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(255,208,0,0.85)';
@@ -270,6 +284,7 @@
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
 
+    // Arrow head
     const ang = Math.atan2(b.y - a.y, b.x - a.x);
     const headLen = 10;
     ctx.fillStyle = 'rgba(255,208,0,0.9)';
@@ -281,6 +296,7 @@
     ctx.fill();
     ctx.restore();
 
+    // From/to rings
     const ringR = Math.max(6, Math.min(12, Math.min(W / 30, H / 30)));
     ctx.save();
     ctx.lineWidth = 2.5;
@@ -291,7 +307,6 @@
     ctx.strokeStyle = '#ffd000';
     ctx.beginPath();
     ctx.arc(b.x, b.y, ringR, 0, Math.PI * 2);
-    ctx.arc(b.x, b.y, ringR, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
@@ -299,18 +314,12 @@
   // ---- coaching loop ----
   let enabled = true;
   let busy = false;
-  let lastMoveCount = -1;
-  let lastBestMoveUcci = '';
+
   let lastAnalyzeTs = 0;
   let pendingTimer = null;
 
-  function currentMoveCount() {
-    try {
-      return window.engine.moveStack().length;
-    } catch (_) {
-      return 0;
-    }
-  }
+  let lastBestMoveUcci = '';
+  let lastPositionKey = '';
 
   function render(bestmoveUcci) {
     requestAnimationFrame(() => {
@@ -323,7 +332,6 @@
       drawHintCanvas(bestmoveUcci, W, H);
     });
 
-    // Minimal label for fast execution
     elMoveLabel.textContent = bestmoveUcci
       ? bestmoveUcci.slice(0, 2) + ' → ' + bestmoveUcci.slice(2, 4)
       : '…';
@@ -332,20 +340,35 @@
   function analyzeNow(reason) {
     if (!enabled || busy) return;
 
+    // Position-change guard
+    const key = getPositionKey();
+    if (key && key === lastPositionKey && reason !== 'force') {
+      // nothing changed, avoid expensive re-search
+      render(lastBestMoveUcci || '');
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastAnalyzeTs < MIN_INTERVAL_MS && reason !== 'force') {
+      // too soon; keep last hint
+      render(lastBestMoveUcci || '');
+      return;
+    }
+
     busy = true;
-    lastAnalyzeTs = Date.now();
+    lastAnalyzeTs = now;
+    lastPositionKey = key;
 
     const run = () => {
       try {
-        const side = window.engine.getSide(); // 0=RED,1=BLACK
+        const side = window.engine.getSide ? window.engine.getSide() : 0; // 0=RED, 1=BLACK
 
-        // If user really wants max strength, do NOT skip black.
         if (COACH_ONLY_WHEN_RED_TO_MOVE && side === window.engine.COLOR.BLACK) {
           render('');
           return;
         }
 
-        const bestMove = pickBestMoveStrong();
+        const bestMove = pickBestMoveUltra();
         const bestUcci = bestMove ? ucciFromMove(bestMove) : '';
         lastBestMoveUcci = bestUcci;
 
@@ -358,31 +381,18 @@
     };
 
     if (USE_IDLE_CALLBACK && typeof window.requestIdleCallback === 'function') {
-      window.requestIdleCallback(run, { timeout: 400 });
+      window.requestIdleCallback(run, { timeout: IDLE_TIMEOUT_MS });
     } else {
       setTimeout(run, 0);
     }
   }
 
   function scheduleAnalyze(reason) {
-    const n = currentMoveCount();
-    if (n === lastMoveCount && reason !== 'force') return;
-    lastMoveCount = n;
-
-    const now = Date.now();
-    const wait = Math.max(0, MIN_INTERVAL_MS - (now - lastAnalyzeTs));
-
     if (pendingTimer) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
     }
-
-    if (wait > 0) {
-      pendingTimer = setTimeout(() => analyzeNow(reason), wait);
-      return;
-    }
-
-    analyzeNow(reason);
+    pendingTimer = setTimeout(() => analyzeNow(reason), DEBOUNCE_MS);
   }
 
   // ---- hook existing GUI lifecycle ----
