@@ -18,30 +18,23 @@
   // =========================
   // ULTRA STRENGTH CONFIG
   // =========================
-
-  // Analyze for BOTH sides (Puzzle / real play)
   const COACH_ONLY_WHEN_RED_TO_MOVE = false;
-
-  // Optional opening book profile (if present). Helps avoid early blunders.
   const COACH_BOT_NAME = 'Liudahua';
 
-  // Stronger-than-level-7: 8–12 seconds typically beats “level 7” style in many UIs.
-  // Increase to 12–15 if your CPU is strong and you can tolerate longer freezes.
+  // NOTE: 10s will freeze UI while searching (expected, because main thread).
+  // Increase to 12–15 if you accept longer freezes for stronger hints.
   const COACH_TIME_SECONDS = 10.0;
 
-  // Give engine room to iterate deep while still stopping by time-control.
-  // 64 is common; 96/128 can be stronger if engine respects time-stop well.
+  // Allow deeper iterative deepening (engine should stop by time-control).
   const COACH_DEPTH_TIMED = 128;
 
-  // Fallback if TC APIs are missing
+  // Fallback if TC APIs missing
   const COACH_DEPTH_UI = 22;
 
-  // With 10s searches, do NOT analyze too frequently.
-  // Cooldown prevents repeated long freezes caused by multiple UI triggers.
-  const MIN_INTERVAL_MS = 1800;  // minimum time between analyses
-  const DEBOUNCE_MS = 250;       // merge rapid triggers
+  // Anti-spam (important with 10s searches)
+  const MIN_INTERVAL_MS = 1800;
+  const DEBOUNCE_MS = 250;
 
-  // Prefer idle callback to reduce perceived lag while dragging
   const USE_IDLE_CALLBACK = true;
   const IDLE_TIMEOUT_MS = 700;
 
@@ -57,8 +50,9 @@
   const elMinimap = document.getElementById('coach-minimap');
   const elCanvas = document.getElementById('coach-canvas');
   const elMoveLabel = document.getElementById('coach-move-label');
+  const elLegend = document.getElementById('coach-legend');
 
-  if (!elMinimap || !elCanvas || !elMoveLabel) {
+  if (!elMinimap || !elCanvas || !elMoveLabel || !elLegend) {
     console.warn('[Coach] UI not found. coach disabled.');
     return;
   }
@@ -79,6 +73,56 @@
 
   // ---- helpers ----
   const PIECE_TO_CHAR = ['.', 'P', 'A', 'B', 'N', 'C', 'R', 'K', 'p', 'a', 'b', 'n', 'c', 'r', 'k'];
+
+  // Build coordinate->square map once (engine uses 11x14 mailbox)
+  const coordToSquare = (function buildMap() {
+    const map = Object.create(null);
+    for (let sq = 0; sq < 11 * 14; sq++) {
+      const c = window.engine.squareToString(sq);
+      if (c && c !== 'xx') map[c] = sq;
+    }
+    return map;
+  })();
+
+  function getPieceCharAtCoord(coord) {
+    const sq = coordToSquare[coord];
+    if (typeof sq === 'undefined') return '.';
+    const piece = window.engine.getPiece(sq);
+    return PIECE_TO_CHAR[piece] || '.';
+  }
+
+  function getGamePhase() {
+    // Heuristic:
+    // - Count remaining pieces (excluding '.')
+    // - Count major pieces (R/C/N and r/c/n)
+    let total = 0;
+    let majors = 0;
+
+    for (let rank = 0; rank <= 9; rank++) {
+      for (let file = 0; file < 9; file++) {
+        const coord = String.fromCharCode(97 + file) + String(rank);
+        const p = getPieceCharAtCoord(coord);
+        if (p === '.') continue;
+        total++;
+        if (p === 'R' || p === 'C' || p === 'N' || p === 'r' || p === 'c' || p === 'n') majors++;
+      }
+    }
+
+    if (total >= 26 && majors >= 10) return 'opening';     // khai cuộc
+    if (total >= 16 && majors >= 6) return 'middlegame';   // trung cuộc
+    return 'endgame';                                      // tàn cuộc
+  }
+
+  function phaseUi(phase) {
+    switch (phase) {
+      case 'opening':
+        return { text: 'KHAI CUỘC', color: '#00d4ff' };   // cyan
+      case 'middlegame':
+        return { text: 'TRUNG CUỘC', color: '#ffd000' };  // yellow
+      default:
+        return { text: 'TÀN CUỘC', color: '#ff4d4d' };    // red
+    }
+  }
 
   function ucciFromMove(move) {
     const s = window.engine.squareToString(window.engine.getSourceSquare(move));
@@ -105,26 +149,9 @@
     };
   }
 
-  // Build coordinate->square map once (engine uses 11x14 mailbox)
-  const coordToSquare = (function buildMap() {
-    const map = Object.create(null);
-    for (let sq = 0; sq < 11 * 14; sq++) {
-      const c = window.engine.squareToString(sq);
-      if (c && c !== 'xx') map[c] = sq;
-    }
-    return map;
-  })();
-
-  function getPieceCharAtCoord(coord) {
-    const sq = coordToSquare[coord];
-    if (typeof sq === 'undefined') return '.';
-    const piece = window.engine.getPiece(sq);
-    return PIECE_TO_CHAR[piece] || '.';
-  }
-
   // Position fingerprint to prevent redundant heavy search
   function getPositionKey() {
-    // Best effort: use fen() if exists, else use move stack as a weaker proxy.
+    // Best effort: use fen() if exists, else move stack length + side
     try {
       if (typeof window.engine.fen === 'function') return window.engine.fen();
     } catch (_) {}
@@ -134,7 +161,6 @@
     } catch (_) {}
 
     try {
-      // moveStack tends to change per position
       return 'ms:' + window.engine.moveStack().length + ':' + (window.engine.getSide ? window.engine.getSide() : '?');
     } catch (_) {}
 
@@ -199,17 +225,16 @@
   }
 
   function timedSearch(depth, seconds) {
-    // Force time-control then search; engine should stop on stopTime
     setTimeControl(seconds);
     return window.engine.search(depth);
   }
 
   function pickBestMoveUltra() {
-    // 1) Opening book (if any)
+    // 1) Opening book
     let m = getCoachBookMove();
     if (m && m !== 0) return m;
 
-    // 2) Strong timed search
+    // 2) Timed search (strong)
     m = timedSearch(COACH_DEPTH_TIMED, COACH_TIME_SECONDS);
     if (m && m !== 0) return m;
 
@@ -235,14 +260,14 @@
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     for (let i = 1; i < 9; i++) {
-      const x = i * W / 9;
+      const x = (i * W) / 9;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
       ctx.stroke();
     }
     for (let j = 1; j < 10; j++) {
-      const y = j * H / 10;
+      const y = (j * H) / 10;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(W, y);
@@ -290,8 +315,14 @@
     ctx.fillStyle = 'rgba(255,208,0,0.9)';
     ctx.beginPath();
     ctx.moveTo(b.x, b.y);
-    ctx.lineTo(b.x - headLen * Math.cos(ang - Math.PI / 6), b.y - headLen * Math.sin(ang - Math.PI / 6));
-    ctx.lineTo(b.x - headLen * Math.cos(ang + Math.PI / 6), b.y - headLen * Math.sin(ang + Math.PI / 6));
+    ctx.lineTo(
+      b.x - headLen * Math.cos(ang - Math.PI / 6),
+      b.y - headLen * Math.sin(ang - Math.PI / 6)
+    );
+    ctx.lineTo(
+      b.x - headLen * Math.cos(ang + Math.PI / 6),
+      b.y - headLen * Math.sin(ang + Math.PI / 6)
+    );
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -322,6 +353,20 @@
   let lastPositionKey = '';
 
   function render(bestmoveUcci) {
+    // Update phase status FIRST (fast + no need to wait for RAF)
+    const phase = getGamePhase();
+    const ui = phaseUi(phase);
+    elLegend.textContent = 'Trạng thái: ' + ui.text;
+    elLegend.style.color = ui.color;
+    elLegend.style.fontWeight = '800';
+    elLegend.style.letterSpacing = '0.6px';
+
+    // Move label (minimal)
+    elMoveLabel.textContent = bestmoveUcci
+      ? bestmoveUcci.slice(0, 2) + ' → ' + bestmoveUcci.slice(2, 4)
+      : '…';
+
+    // Draw minimap on next frame
     requestAnimationFrame(() => {
       resizeCanvas();
       const W = elMinimap.clientWidth;
@@ -331,10 +376,6 @@
       drawPiecesCanvas(W, H);
       drawHintCanvas(bestmoveUcci, W, H);
     });
-
-    elMoveLabel.textContent = bestmoveUcci
-      ? bestmoveUcci.slice(0, 2) + ' → ' + bestmoveUcci.slice(2, 4)
-      : '…';
   }
 
   function analyzeNow(reason) {
@@ -343,14 +384,12 @@
     // Position-change guard
     const key = getPositionKey();
     if (key && key === lastPositionKey && reason !== 'force') {
-      // nothing changed, avoid expensive re-search
       render(lastBestMoveUcci || '');
       return;
     }
 
     const now = Date.now();
     if (now - lastAnalyzeTs < MIN_INTERVAL_MS && reason !== 'force') {
-      // too soon; keep last hint
       render(lastBestMoveUcci || '');
       return;
     }
@@ -363,7 +402,7 @@
       try {
         const side = window.engine.getSide ? window.engine.getSide() : 0; // 0=RED, 1=BLACK
 
-        if (COACH_ONLY_WHEN_RED_TO_MOVE && side === window.engine.COLOR.BLACK) {
+        if (COACH_ONLY_WHEN_RED_TO_MOVE && window.engine.COLOR && side === window.engine.COLOR.BLACK) {
           render('');
           return;
         }
