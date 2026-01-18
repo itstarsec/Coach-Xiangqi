@@ -23,8 +23,8 @@
   // In the original GUI, Liudahua uses opening book and time=5s.
   const COACH_BOT_NAME = 'Liudahua';
   // Keep searches short to minimize stutter on weaker CPUs.
-  const COACH_TIME_SECONDS = 0.12;   // ~120ms budget
-  const COACH_DEPTH_FALLBACK = 18;   // when time isn't available
+  const COACH_TIME_SECONDS = 2.0;   // ~120ms budget
+  const COACH_DEPTH_FALLBACK = 64;   // when time isn't available
 
   // Required globals (created by src/gui/game/xiangqi.js)
   if (typeof window.engine === 'undefined') {
